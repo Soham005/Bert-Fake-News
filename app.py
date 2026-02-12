@@ -1,42 +1,35 @@
-# ==============================
-# Financial News Sentiment App
-# Single File - Streamlit Safe
-# ==============================
+# =====================================
+# Financial News Sentiment Analyzer
+# Streamlit Cloud Safe Version
+# =====================================
 
 import streamlit as st
-
-# Safe Imports (prevents cloud crash)
-try:
-    import yfinance as yf
-except:
-    import subprocess
-    subprocess.run(["pip", "install", "yfinance"])
-    import yfinance as yf
-
-try:
-    import torch
-    import torch.nn.functional as F
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-except:
-    import subprocess
-    subprocess.run(["pip", "install", "torch", "transformers"])
-    import torch
-    import torch.nn.functional as F
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
+import requests
 import pandas as pd
+import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import matplotlib.pyplot as plt
 
-# ------------------------------
+# ----------------------------
 # Page Setup
-# ------------------------------
-st.set_page_config(page_title="FinBERT Sentiment Analyzer", layout="wide")
+# ----------------------------
+st.set_page_config(page_title="FinBERT News Analyzer", layout="wide")
 st.title("📊 Financial News Sentiment Analysis (FinBERT)")
-st.markdown("Analyze real-time Yahoo Finance news using BERT NLP model.")
+st.markdown("Analyze live financial news sentiment using BERT.")
 
-# ------------------------------
-# Load Model (Cached)
-# ------------------------------
+# ----------------------------
+# Sidebar Settings
+# ----------------------------
+st.sidebar.header("Settings")
+
+stock_keyword = st.sidebar.text_input("Enter Company or Stock Name", "Apple")
+num_articles = st.sidebar.slider("Number of Articles", 5, 20, 10)
+news_api_key = st.sidebar.text_input("Enter Your NewsAPI Key", type="password")
+
+# ----------------------------
+# Load FinBERT Model (Cached)
+# ----------------------------
 @st.cache_resource
 def load_model():
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
@@ -45,24 +38,9 @@ def load_model():
 
 tokenizer, model = load_model()
 
-# ------------------------------
-# Sidebar Controls
-# ------------------------------
-st.sidebar.header("Stock Settings")
-
-stock_symbol = st.sidebar.text_input(
-    "Enter Stock Symbol (e.g., AAPL, TSLA, MSFT)", 
-    "AAPL"
-)
-
-num_articles = st.sidebar.slider(
-    "Number of Articles", 
-    5, 20, 10
-)
-
-# ------------------------------
+# ----------------------------
 # Sentiment Function
-# ------------------------------
+# ----------------------------
 def analyze_sentiment(text):
     inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
     outputs = model(**inputs)
@@ -74,69 +52,81 @@ def analyze_sentiment(text):
 
     return labels[predicted_class.item()], confidence.item()
 
-# ------------------------------
+# ----------------------------
+# Fetch News Function
+# ----------------------------
+def fetch_news(query, api_key):
+    url = (
+        f"https://newsapi.org/v2/everything?"
+        f"q={query}&"
+        f"language=en&"
+        f"sortBy=publishedAt&"
+        f"pageSize=20&"
+        f"apiKey={api_key}"
+    )
+    response = requests.get(url)
+    data = response.json()
+    return data.get("articles", [])
+
+# ----------------------------
 # Main Button
-# ------------------------------
+# ----------------------------
 if st.button("🔍 Analyze News"):
 
-    try:
-        ticker = yf.Ticker(stock_symbol)
-        news = ticker.news
+    if not news_api_key:
+        st.error("Please enter your NewsAPI key in the sidebar.")
+        st.stop()
 
-        if not news:
-            st.warning("No news found for this stock.")
-            st.stop()
+    with st.spinner("Fetching news..."):
+        articles = fetch_news(stock_keyword, news_api_key)
 
-        df = pd.DataFrame(news)
+    if not articles:
+        st.warning("No news articles found.")
+        st.stop()
 
-        # Safe column handling
-        required_cols = [col for col in ['title', 'publisher', 'link'] if col in df.columns]
-        df = df[required_cols].head(num_articles)
+    df = pd.DataFrame(articles)
+    df = df[['title', 'source', 'url']].head(num_articles)
 
-        sentiments = []
-        confidences = []
+    sentiments = []
+    confidences = []
 
-        with st.spinner("Running FinBERT model..."):
-            for headline in df['title']:
-                sentiment, confidence = analyze_sentiment(headline)
-                sentiments.append(sentiment)
-                confidences.append(confidence)
+    with st.spinner("Running FinBERT sentiment analysis..."):
+        for headline in df['title']:
+            sentiment, confidence = analyze_sentiment(headline)
+            sentiments.append(sentiment)
+            confidences.append(confidence)
 
-        df['Sentiment'] = sentiments
-        df['Confidence'] = confidences
+    df['Sentiment'] = sentiments
+    df['Confidence'] = confidences
 
-        # ------------------------------
-        # Display Results
-        # ------------------------------
-        st.subheader("📰 News Sentiment Results")
-        st.dataframe(df)
+    # ----------------------------
+    # Show Data
+    # ----------------------------
+    st.subheader("📰 News Sentiment Results")
+    st.dataframe(df[['title', 'Sentiment', 'Confidence']])
 
-        # ------------------------------
-        # Sentiment Chart
-        # ------------------------------
-        st.subheader("📊 Sentiment Distribution")
+    # ----------------------------
+    # Sentiment Distribution Chart
+    # ----------------------------
+    st.subheader("📊 Sentiment Distribution")
 
-        sentiment_counts = df['Sentiment'].value_counts()
+    sentiment_counts = df['Sentiment'].value_counts()
 
-        fig, ax = plt.subplots()
-        sentiment_counts.plot(kind='bar', ax=ax)
-        plt.xticks(rotation=0)
-        st.pyplot(fig)
+    fig, ax = plt.subplots()
+    sentiment_counts.plot(kind='bar', ax=ax)
+    plt.xticks(rotation=0)
+    st.pyplot(fig)
 
-        # ------------------------------
-        # Overall Score
-        # ------------------------------
-        sentiment_score = (
-            df['Sentiment'].map({
-                "Positive": 1,
-                "Neutral": 0,
-                "Negative": -1
-            }).mean()
-        )
+    # ----------------------------
+    # Overall Sentiment Score
+    # ----------------------------
+    sentiment_score = (
+        df['Sentiment'].map({
+            "Positive": 1,
+            "Neutral": 0,
+            "Negative": -1
+        }).mean()
+    )
 
-        st.subheader("📈 Overall Sentiment Score")
-        st.metric("Sentiment Score (-1 to +1)", round(sentiment_score, 3))
-
-    except Exception as e:
-        st.error("Something went wrong while fetching or analyzing data.")
-        st.exception(e)
+    st.subheader("📈 Overall Sentiment Score")
+    st.metric("Score (-1 = Negative, +1 = Positive)", round(sentiment_score, 3))
