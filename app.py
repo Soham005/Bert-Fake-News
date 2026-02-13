@@ -1,20 +1,20 @@
 # ==========================================
 # Financial News Sentiment Analyzer
-# Fully Cloud-Compatible Version
+# Stable Cloud Version (No FinBERT)
 # ==========================================
 
 import streamlit as st
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-import time
+from textblob import TextBlob
 
 # ----------------------------
 # Page Config
 # ----------------------------
 st.set_page_config(page_title="Financial News Sentiment", layout="wide")
-st.title("📊 Financial News Sentiment Analysis (FinBERT API)")
-st.markdown("Live financial news sentiment using hosted FinBERT model.")
+st.title("📊 Financial News Sentiment Analysis")
+st.markdown("Live financial news sentiment analysis.")
 
 # ----------------------------
 # Sidebar Inputs
@@ -24,10 +24,9 @@ st.sidebar.header("Settings")
 company = st.sidebar.text_input("Company Name", "Apple")
 num_articles = st.sidebar.slider("Number of Articles", 5, 20, 10)
 news_api_key = st.sidebar.text_input("NewsAPI Key", type="password")
-hf_api_key = st.sidebar.text_input("HuggingFace API Key", type="password")
 
 # ----------------------------
-# Fetch News Function
+# Fetch News
 # ----------------------------
 def fetch_news(query, api_key):
     url = (
@@ -40,50 +39,30 @@ def fetch_news(query, api_key):
     if response.status_code != 200:
         return []
 
-    data = response.json()
-    return data.get("articles", [])
-
+    return response.json().get("articles", [])
 
 # ----------------------------
-# HuggingFace Sentiment API
+# Sentiment Function (TextBlob)
 # ----------------------------
-def analyze_sentiment_hf(text, hf_key):
-    API_URL = "https://api-inference.huggingface.co/models/ProsusAI/finbert"
-    headers = {"Authorization": f"Bearer {hf_key}"}
+def analyze_sentiment(text):
+    polarity = TextBlob(text).sentiment.polarity
 
-    response = requests.post(
-        API_URL,
-        headers=headers,
-        json={"inputs": text}
-    )
-
-    if response.status_code != 200:
-        return None, None
-
-    result = response.json()
-
-    # Handle model loading / error response
-    if isinstance(result, dict) and "error" in result:
-        return None, None
-
-    try:
-        scores = result[0]
-        best = max(scores, key=lambda x: x["score"])
-        return best["label"].lower(), round(best["score"], 3)
-    except:
-        return None, None
-
+    if polarity > 0:
+        return "positive", polarity
+    elif polarity < 0:
+        return "negative", polarity
+    else:
+        return "neutral", polarity
 
 # ----------------------------
 # Analyze Button
 # ----------------------------
 if st.button("🔍 Analyze News"):
 
-    if not news_api_key or not hf_api_key:
-        st.error("Please enter both NewsAPI and HuggingFace API keys.")
+    if not news_api_key:
+        st.error("Please enter your NewsAPI key.")
         st.stop()
 
-    # Fetch News
     with st.spinner("Fetching news..."):
         articles = fetch_news(company, news_api_key)
 
@@ -100,39 +79,24 @@ if st.button("🔍 Analyze News"):
     df = df[["title"]].head(num_articles)
 
     sentiments = []
-    confidences = []
+    scores = []
 
-    # Analyze Sentiment
-    with st.spinner("Analyzing sentiment via FinBERT API..."):
-        for title in df["title"]:
-            label, score = analyze_sentiment_hf(title, hf_api_key)
+    for title in df["title"]:
+        label, polarity = analyze_sentiment(title)
+        sentiments.append(label)
+        scores.append(round(polarity, 3))
 
-            # If model is loading, wait once and retry
-            if label is None:
-                time.sleep(3)
-                label, score = analyze_sentiment_hf(title, hf_api_key)
-
-            if label is not None:
-                sentiments.append(label)
-                confidences.append(score)
-
-    # If no valid predictions
-    if not sentiments:
-        st.error("FinBERT API did not return predictions. Try again in 1 minute.")
-        st.stop()
-
-    df = df.iloc[:len(sentiments)]
     df["Sentiment"] = sentiments
-    df["Confidence"] = confidences
+    df["Polarity"] = scores
 
     # ----------------------------
-    # Display Table
+    # Display Results
     # ----------------------------
     st.subheader("📰 News Sentiment Results")
     st.dataframe(df)
 
     # ----------------------------
-    # Sentiment Distribution Chart
+    # Sentiment Distribution
     # ----------------------------
     st.subheader("📊 Sentiment Distribution")
 
@@ -144,16 +108,9 @@ if st.button("🔍 Analyze News"):
     st.pyplot(fig)
 
     # ----------------------------
-    # Overall Sentiment Score
+    # Overall Score
     # ----------------------------
-    score_map = {"positive": 1, "neutral": 0, "negative": -1}
-
-    mapped_scores = df["Sentiment"].map(score_map)
-
-    if mapped_scores.dropna().empty:
-        overall_score = 0
-    else:
-        overall_score = mapped_scores.mean()
+    overall_score = df["Polarity"].mean()
 
     st.subheader("📈 Overall Sentiment Score")
-    st.metric("Score (-1 to +1)", round(overall_score, 3))
+    st.metric("Average Polarity (-1 to +1)", round(overall_score, 3))
