@@ -1,5 +1,4 @@
 streamlit
 requests
-transformers
 pandas
 matplotlib
