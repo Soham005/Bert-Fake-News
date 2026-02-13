@@ -1,59 +1,45 @@
-# =====================================
-# Financial News Sentiment Analyzer
-# Streamlit Cloud Safe Version
-# =====================================
+# ==========================================
+# Financial News Sentiment Analyzer (FinBERT)
+# Production-Ready Streamlit Version
+# ==========================================
 
 import streamlit as st
 import requests
 import pandas as pd
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import matplotlib.pyplot as plt
+from transformers import pipeline
 
 # ----------------------------
-# Page Setup
+# Page Config
 # ----------------------------
-st.set_page_config(page_title="FinBERT News Analyzer", layout="wide")
-st.title("📊 Financial News Sentiment Analysis (FinBERT)")
-st.markdown("Analyze live financial news sentiment using BERT.")
+st.set_page_config(page_title="FinBERT Sentiment Analyzer", layout="wide")
+st.title("📊 Financial News Sentiment Analysis")
+st.markdown("Analyze real-time financial news using FinBERT.")
 
 # ----------------------------
 # Sidebar Settings
 # ----------------------------
 st.sidebar.header("Settings")
 
-stock_keyword = st.sidebar.text_input("Enter Company or Stock Name", "Apple")
+company = st.sidebar.text_input("Enter Company Name", "Apple")
 num_articles = st.sidebar.slider("Number of Articles", 5, 20, 10)
-news_api_key = st.sidebar.text_input("Enter Your NewsAPI Key", type="password")
+news_api_key = st.sidebar.text_input("NewsAPI Key", type="password")
 
 # ----------------------------
 # Load FinBERT Model (Cached)
 # ----------------------------
 @st.cache_resource
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-    model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-    return tokenizer, model
+    sentiment_pipeline = pipeline(
+        "sentiment-analysis",
+        model="ProsusAI/finbert"
+    )
+    return sentiment_pipeline
 
-tokenizer, model = load_model()
-
-# ----------------------------
-# Sentiment Function
-# ----------------------------
-def analyze_sentiment(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-    outputs = model(**inputs)
-
-    probs = F.softmax(outputs.logits, dim=1)
-    confidence, predicted_class = torch.max(probs, dim=1)
-
-    labels = ["Negative", "Neutral", "Positive"]
-
-    return labels[predicted_class.item()], confidence.item()
+sentiment_model = load_model()
 
 # ----------------------------
-# Fetch News Function
+# Fetch News
 # ----------------------------
 def fetch_news(query, api_key):
     url = (
@@ -64,68 +50,80 @@ def fetch_news(query, api_key):
         f"pageSize=20&"
         f"apiKey={api_key}"
     )
+
     response = requests.get(url)
+
+    if response.status_code != 200:
+        return None
+
     data = response.json()
     return data.get("articles", [])
 
 # ----------------------------
-# Main Button
+# Analyze Button
 # ----------------------------
 if st.button("🔍 Analyze News"):
 
     if not news_api_key:
-        st.error("Please enter your NewsAPI key in the sidebar.")
+        st.error("Please enter your NewsAPI key.")
         st.stop()
 
-    with st.spinner("Fetching news..."):
-        articles = fetch_news(stock_keyword, news_api_key)
+    with st.spinner("Fetching latest news..."):
+        articles = fetch_news(company, news_api_key)
 
     if not articles:
-        st.warning("No news articles found.")
+        st.warning("No news found or API limit reached.")
         st.stop()
 
     df = pd.DataFrame(articles)
-    df = df[['title', 'source', 'url']].head(num_articles)
 
-    sentiments = []
-    confidences = []
+    if "title" not in df.columns:
+        st.error("Unexpected API response format.")
+        st.stop()
 
-    with st.spinner("Running FinBERT sentiment analysis..."):
-        for headline in df['title']:
-            sentiment, confidence = analyze_sentiment(headline)
-            sentiments.append(sentiment)
-            confidences.append(confidence)
-
-    df['Sentiment'] = sentiments
-    df['Confidence'] = confidences
+    df = df[["title"]].head(num_articles)
 
     # ----------------------------
-    # Show Data
+    # Sentiment Analysis
+    # ----------------------------
+    with st.spinner("Running FinBERT sentiment analysis..."):
+        results = sentiment_model(df["title"].tolist())
+
+    df["Sentiment"] = [r["label"] for r in results]
+    df["Confidence"] = [round(r["score"], 3) for r in results]
+
+    # ----------------------------
+    # Display Results
     # ----------------------------
     st.subheader("📰 News Sentiment Results")
-    st.dataframe(df[['title', 'Sentiment', 'Confidence']])
+    st.dataframe(df)
 
     # ----------------------------
     # Sentiment Distribution Chart
     # ----------------------------
     st.subheader("📊 Sentiment Distribution")
 
-    sentiment_counts = df['Sentiment'].value_counts()
+    sentiment_counts = df["Sentiment"].value_counts()
 
     fig, ax = plt.subplots()
-    sentiment_counts.plot(kind='bar', ax=ax)
+    sentiment_counts.plot(kind="bar", ax=ax)
     plt.xticks(rotation=0)
     st.pyplot(fig)
 
     # ----------------------------
     # Overall Sentiment Score
     # ----------------------------
+    score_map = {
+        "positive": 1,
+        "neutral": 0,
+        "negative": -1
+    }
+
     sentiment_score = (
-        df['Sentiment'].map({
-            "Positive": 1,
-            "Neutral": 0,
-            "Negative": -1
-        }).mean()
+        df["Sentiment"]
+        .str.lower()
+        .map(score_map)
+        .mean()
     )
 
     st.subheader("📈 Overall Sentiment Score")
